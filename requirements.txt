@@ -1,0 +1,11 @@
+google-cloud-vision
+openai
+pdf2image
+pillow
+openpyxl
+numpy
+pandas
+tqdm
+requests
+python-dotenv
+tiktoken

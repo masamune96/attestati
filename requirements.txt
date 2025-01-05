@@ -1,5 +1,6 @@
 google-cloud-vision
 openai
+aiohttp
 pdf2image
 pillow
 openpyxl

@@ -1,6 +1,6 @@
 import sys
 import json
-import threading
+import aiohttp
 from utils.style import *
 from utils.format import Formatter
 from utils.config import openai_api_key
@@ -79,22 +79,19 @@ Compilazione JSON:
 SYSTEM_PROMPT = shared.token_calculation(prompt+prompt_db)
 
 # chiamata a openai API
-def openai_call(testi_batch):
-    
-    # stima del tempo di attesa
-    tempo_stimato = shared.stima_durata(testi_batch)
-    # flag per fermare il caricamento
-    stop_loading = threading.Event()
-    # avvia la barra di caricamento in un thread separato
-    progress_thread = threading.Thread(target=progress_bar, args=(tempo_stimato, stop_loading))
-    progress_thread.start()
-    
+async def openai_call(testi_batch, batch_size):
+
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {openai_api_key}",
+        "Content-Type": "application/json"
+    }
     # prompt per openai
     prompt = f"""
 Ogni corso del database, quindi ogni riga, è espresso nella forma [CODICE CORSO] --- [NOME CORSO] (alias) --- [DURATA MINIMA - DURATA MASSIMA]
-Ti invio inoltre un totale di {shared.current_batch_size} testi estratti da altrettanti attestati di partecipazione di dipendenti a corsi di formazione. 
+Ti invio inoltre un totale di {batch_size} testi estratti da altrettanti attestati di partecipazione di dipendenti a corsi di formazione. 
 Ogni testo è numerato e introdotto dalla dicitura "Attestato X - [nome_file]", dove X è il numero d'ordine dell'attestato nell'elenco nonchè l'id dell'attestato.
-Rispondi SEMPRE con una lista [] che contenga come elementi ESATTAMENTE {shared.current_batch_size} JSON, uno per ciascuno degli attestati. A ciascun attestato deve essere associato il suo JSON, che non condivide con nessun altro attestato nell'elenco.
+Rispondi SEMPRE con una lista [] che contenga come elementi ESATTAMENTE {batch_size} JSON, uno per ciascuno degli attestati. A ciascun attestato deve essere associato il suo JSON, che non condivide con nessun altro attestato nell'elenco.
 Esempio di output per N attestati: [{{json_attestato1}}, {{json_attestato2}}, ... {{json_attestatoN}}]
 Il tuo output verrà elaborato automaticamente. Qualsiasi deviazione dal formato richiesto causerà errori nel sistema.
 
@@ -152,44 +149,41 @@ Compilazione JSON:
             "content": "\n\n".join([f"Attestato {i+1} - {nome_file}\n{text}" for i, (nome_file, text) in enumerate(testi_batch)])
         }
     ]
+    payload = {
+        "model": "gpt-4o",
+        "messages": messaggi,
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "temperature": 0.0
+    }
 
     try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status == 200:
+                    response = await response.json()
 
-        response = client.chat.completions.create(
-            messages=messaggi,
-            model="gpt-4o",
-            # max_tokens troppo piccolo causa il troncamento dell'output
-            # max_tokens troppo grande causa errore 400 (max_tokens is too large)
-            max_tokens= MAX_OUTPUT_TOKENS,
-            temperature=0.0,
-        )
+                    # aggiorna i token utilizzati
+                    shared.token(response)
 
-        # aggiorna i token utilizzati
-        shared.token(response)
+                    # DEBUG
+                    # print(json.dumps(response, indent=4))
+                    # prompt_completo = messaggi[0]["content"] + messaggi[1]["content"]
+                    # print(prompt_completo)
 
-        # ferma la barra di caricamento
-        stop_loading.set()
-        progress_thread.join()
+                    analisi = json.loads(Formatter.pulisci_output(response["choices"][0]["message"]["content"]))
 
-        # DEBUG
-        # print(json.dumps(response.to_dict(), indent=4))
-        # print(response.choices[0].message.content)
-        # prompt_completo = messaggi[0]["content"] + messaggi[1]["content"]
-        # print(prompt_completo)
-        # print(shared.token_calculation(prompt_db))
+                    # DEBUG JSON
+                    if len(analisi) != len(testi_batch):
+                        print(f"{RED}Attenzione: Numero di JSON restituiti ({len(analisi)}) non corrisponde al numero di attestati inviati ({len(testi_batch)}){RESET}")
 
-        analisi = json.loads(Formatter.pulisci_output(response.choices[0].message.content))
+                    return analisi
         
-        # DEBUG JSON
-        if len(analisi) != len(testi_batch):
-            print(f"\n{RED}Attenzione: Numero di JSON restituiti ({len(analisi)}) non corrisponde al numero di attestati inviati ({len(testi_batch)}){RESET}")
-        
-        return analisi
-
+                else:
+                    error_message = await response.text()
+                    print(f"{RED}Errore API OpenAI:{RESET} {error_message}")
+                    return []
+                
     except Exception as e:
-        stop_loading.set()
-        progress_thread.join()
-
         error_message = str(e)
         print(f"\n{RED}{BOLD}Errore nell'elaborazione con OpenAI:{RESET} {e}")
 
@@ -207,6 +201,7 @@ def crea_batch(testi_estratti):
     """
     Crea batch rispettando il limite totale di token per richiesta (input e output).
     - testi_estratti: Lista di dizionari con `nome_file`, `testo` e `token`.
+    - return: Dimensione batch, batch.
     """
 
     max_input_tokens = int((MAX_TOTAL_TOKENS - MAX_OUTPUT_TOKENS - SYSTEM_PROMPT) * (1 - BATCH_SAFETY_MARGIN))
@@ -227,10 +222,7 @@ def crea_batch(testi_estratti):
             # if token_output_stimati > max_output_tokens:
             #    print(f"Limite di output raggiunto: {token_output_stimati}/{max_output_tokens}")
             
-            # aggiorna lunghezza del batch
-            shared.current_batch_size = len(batch_corrente)
-            
-            yield batch_corrente
+            yield len(batch_corrente), batch_corrente
             batch_corrente = []
             token_corrente_input = 0
 
@@ -240,5 +232,4 @@ def crea_batch(testi_estratti):
 
     # ritorna l'ultimo batch, se esiste
     if batch_corrente:
-        shared.current_batch_size = len(batch_corrente)
-        yield batch_corrente
+        yield len(batch_corrente), batch_corrente

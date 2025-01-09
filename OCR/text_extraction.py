@@ -31,8 +31,11 @@ def estrai_google_vision(pdf_path):
 
             if response.error.message:
                 raise Exception(f"Errore nell'API di Vision: {response.error.message}")
+            
+            # gestisce pagine vuote
+            if response.text_annotations:
+                testo_completo += response.text_annotations[0].description + "\n"
 
-            testo_completo += response.text_annotations[0].description + "\n"
         return testo_completo.strip()
 
     except Exception as e:

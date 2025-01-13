@@ -16,7 +16,7 @@ PRICE_API_OUTPUT = 0.01000
 # numero di token di output stimato per attestato (dipende dall'attestato)
 TOKEN_OUTPUT_PER_PDF = 170
 # numero di token processati per secondo (stima)
-TOKEN_OUTPUT_RATE = 300
+TOKEN_OUTPUT_RATE = 250
 
 
 class SharedState:

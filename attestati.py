@@ -49,6 +49,7 @@ def aggiorna_excel(excel_path, pdf_folder):
                         sheet[f'I{row}'] = attestato.get("tdi", "ND")
                         sheet[f'J{row}'] = nome_file
                         sheet[f'H{row}'] = attestato.get("codice_corso", "ND")
+                        sheet[f'N{row}'] = attestato.get("durata_corso", "ND")
                         # DEBUG columns
                         sheet[f'T{row}'] = nome_corso
                         sheet[f'U{row}'] = testo_attestato
